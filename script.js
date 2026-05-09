@@ -1,6 +1,7 @@
 ﻿const pasteZone = document.getElementById('pasteZone');
 const statusText = document.getElementById('statusText');
 const outputLog = document.getElementById('outputLog');
+const readClipboardButton = document.getElementById('readClipboardButton');
 const inspectSelectionButton = document.getElementById('inspectSelectionButton');
 const copyOutputButton = document.getElementById('copyOutputButton');
 const clearButton = document.getElementById('clearButton');
@@ -123,7 +124,9 @@ document.addEventListener('paste', function (e) {
 
   if (clipboardData?.items) {
     pageLog('\n── Clipboard Items ──');
-    for (let i = 0; i < clipboardData.items.length; i++) {
+    const itemCount = clipboardData.items.length;
+    pageLog(`${itemCount} item(s) found.`);
+    for (let i = 0; i < itemCount; i++) {
       const item = clipboardData.items[i];
       pageLog(`Item ${i}: type=${item.type}  kind=${item.kind}`);
       if (item.kind === 'string') {
@@ -131,6 +134,32 @@ document.addEventListener('paste', function (e) {
           pageLog(`Item ${i} raw string (${str.length} chars):`);
           pageLog(analyzeUnicode(str));
         });
+      } else if (item.kind === 'file') {
+        const file = item.getAsFile();
+        if (file) {
+          pageLog(`Item ${i} is a FILE: name=${file.name || '(none)'}  size=${file.size} bytes  type=${file.type}`);
+          const reader = new FileReader();
+          reader.onload = () => {
+            const result = reader.result;
+            if (typeof result === 'string') {
+              pageLog(`Item ${i} file content (${result.length} chars):`);
+              pageLog(result.slice(0, 2000));
+            } else {
+              const bytes = new Uint8Array(result);
+              const hex = Array.from(bytes.slice(0, 128)).map(b => b.toString(16).padStart(2, '0')).join(' ');
+              const b64 = btoa(String.fromCharCode(...bytes));
+              pageLog(`Item ${i} binary (${bytes.length} bytes), first 128 hex bytes:`);
+              pageLog(hex);
+              pageLog(`Item ${i} full base64:`);
+              pageLog(b64);
+            }
+          };
+          if (file.type.startsWith('text/')) {
+            reader.readAsText(file);
+          } else {
+            reader.readAsArrayBuffer(file);
+          }
+        }
       }
     }
   }
@@ -140,6 +169,79 @@ document.addEventListener('paste', function (e) {
   setStatus('Paste captured! See output below.');
 
 }, true /* capture phase — fires before contenteditable receives content */);
+
+// ── Read full clipboard (all MIME types) ────────────────────────────────────
+// Uses the modern Clipboard API which can expose proprietary / binary types
+// that the paste event never surfaces. Requires user gesture + permission prompt.
+
+async function readClipboard() {
+  if (!navigator.clipboard?.read) {
+    pageLog('navigator.clipboard.read() is not available in this browser.');
+    pageLog('This API is needed to see non-text clipboard formats (like the Threads rich text type).');
+    setStatus('Clipboard.read() not supported here.');
+    return;
+  }
+
+  pageLog('════════════════════════════════════');
+  pageLog('CLIPBOARD.READ()  ' + new Date().toISOString());
+  pageLog('════════════════════════════════════');
+  setStatus('Requesting clipboard access…');
+
+  try {
+    const clipboardItems = await navigator.clipboard.read();
+    pageLog(`${clipboardItems.length} ClipboardItem(s) found.`);
+
+    for (let i = 0; i < clipboardItems.length; i++) {
+      const ci = clipboardItems[i];
+      pageLog(`\n── ClipboardItem ${i} ──`);
+      pageLog('Types: ' + ci.types.join(', '));
+
+      for (const type of ci.types) {
+        try {
+          const blob = await ci.getType(type);
+          pageLog(`\n  [${type}]  size=${blob.size} bytes`);
+
+          if (type.startsWith('text/') || type === 'application/json') {
+            const text = await blob.text();
+            pageLog(`  Content (${text.length} chars):`);
+            if (type === 'text/plain' || type === 'text/html') {
+              pageLog(analyzeUnicode(text));
+            }
+            if (type === 'text/html') {
+              pageLog('  Raw HTML:');
+              pageLog(text);
+            } else {
+              pageLog(text.slice(0, 3000));
+            }
+          } else {
+            // Binary or unknown type — dump hex + base64
+            const buf = await blob.arrayBuffer();
+            const bytes = new Uint8Array(buf);
+            const hex = Array.from(bytes.slice(0, 256)).map(b => b.toString(16).padStart(2, '0')).join(' ');
+            // Convert binary to base64 in chunks to avoid stack overflow
+            let b64 = '';
+            const CHUNK = 8192;
+            for (let j = 0; j < bytes.length; j += CHUNK) {
+              b64 += btoa(String.fromCharCode(...bytes.subarray(j, j + CHUNK)));
+            }
+            pageLog(`  First 256 bytes (hex):`);
+            pageLog(hex);
+            pageLog(`  Full base64 (${bytes.length} bytes):`);
+            pageLog(b64);
+          }
+        } catch (err) {
+          pageLog(`  Failed to read type ${type}: ${err?.message || String(err)}`);
+        }
+      }
+    }
+
+    setStatus('Clipboard read complete.');
+  } catch (err) {
+    pageLog('clipboard.read() failed: ' + (err?.message || String(err)));
+    pageLog('If this says "not allowed": tap Allow when the permission prompt appears, or check iOS Settings → Safari → Paste from Other Apps.');
+    setStatus('Clipboard read failed.');
+  }
+}
 
 // ── Inspect selection ─────────────────────────────────────────────────────────
 
@@ -204,6 +306,10 @@ function copyOutput() {
 // ── Wire up buttons ───────────────────────────────────────────────────────────
 
 document.addEventListener('DOMContentLoaded', () => {
+  if (readClipboardButton) {
+    readClipboardButton.addEventListener('click', readClipboard);
+  }
+
   if (inspectSelectionButton) {
     inspectSelectionButton.addEventListener('click', inspectSelection);
   }
