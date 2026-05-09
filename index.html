@@ -115,6 +115,40 @@
       overflow: auto;
     }
 
+    .paste-zone {
+      margin-top: 1.5rem;
+      min-height: 100px;
+      padding: 1rem;
+      border-radius: 22px;
+      border: 2px dashed rgba(99, 102, 241, 0.5);
+      background: rgba(99, 102, 241, 0.06);
+      color: #64748b;
+      font-size: 1rem;
+      line-height: 1.6;
+      cursor: text;
+      transition: border-color 0.2s, background 0.2s;
+      -webkit-user-select: text;
+      user-select: text;
+      outline: none;
+    }
+
+    .paste-zone:focus {
+      border-color: #6366f1;
+      background: rgba(99, 102, 241, 0.12);
+      color: #e2e8f0;
+    }
+
+    .paste-zone.has-content {
+      color: #e2e8f0;
+    }
+
+    .paste-zone-label {
+      display: block;
+      margin-bottom: 0.75rem;
+      font-weight: 700;
+      color: #f8fafc;
+    }
+
     .hint {
       margin-top: 1rem;
       color: #94a3b8;
@@ -152,12 +186,25 @@
 
       <p id="statusText" class="status">Ready.</p>
 
+      <span class="paste-zone-label">Paste zone</span>
+      <div
+        id="pasteZone"
+        class="paste-zone"
+        contenteditable="true"
+        role="textbox"
+        aria-multiline="true"
+        aria-label="Paste your Threads rich text here"
+        spellcheck="false"
+        autocorrect="off"
+        autocapitalize="off"
+      >Tap here to focus, then paste your Threads text.</div>
+
       <div class="output-wrapper">
         <span class="output-label">Debug output</span>
         <div id="outputLog" class="output" aria-live="polite"></div>
       </div>
 
-      <p class="hint">Tip: use the browser's paste action after enabling the debugger, or tap the other buttons to inspect the editor state.</p>
+      <p class="hint">How to use: tap <strong>Enable paste debugger</strong>, then tap the paste zone above, then long-press and paste your Threads text. The output appears in the debug log.</p>
     </main>
   </div>
   <script src="script.js"></script>
