@@ -125,6 +125,27 @@
       opacity: 0.8;
     }
 
+    .manual-input {
+      display: block;
+      width: 100%;
+      min-height: 80px;
+      padding: 0.9rem 1rem;
+      border-radius: 16px;
+      background: rgba(15, 23, 42, 0.6);
+      border: 1px solid rgba(148, 163, 184, 0.2);
+      color: #e2e8f0;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 0.85rem;
+      line-height: 1.5;
+      resize: vertical;
+      -webkit-user-select: text;
+      user-select: text;
+    }
+
+    .manual-input::placeholder {
+      color: #475569;
+    }
+
     .output-area {
       display: block;
       width: 100%;
@@ -177,7 +198,22 @@
     </section>
 
     <section>
-      <label>Debug output</label>
+      <label>Alternative: iOS Shortcuts input</label>
+      <p class="sub" style="margin-bottom:0.8rem">iOS Safari cannot read native app clipboard formats. Instead, create an iOS Shortcut that runs after copying in Threads: <strong>Get Clipboard → Get Details of Rich Text → URL-encode → Open URL pointing here</strong>. Paste the raw Shortcut output below and tap Analyze.</p>
+      <textarea
+        id="manualInput"
+        class="manual-input"
+        placeholder="Paste raw text, base64, RTF, or any Shortcut output here…"
+        spellcheck="false"
+        autocorrect="off"
+        autocapitalize="off"
+      ></textarea>
+      <div class="btn-row">
+        <button id="analyzeManualButton" class="primary">Analyze manual input</button>
+      </div>
+    </section>
+
+    <section>
       <textarea
         id="outputLog"
         class="output-area"
@@ -186,7 +222,7 @@
         aria-label="Debug output"
       ></textarea>
       <div class="btn-row">
-        <button id="readClipboardButton" class="primary">Read clipboard (all types)</button>
+        <button id="readClipboardButton" class="primary">Read clipboard — desktop only</button>
         <button id="inspectSelectionButton" class="primary">Inspect selection</button>
         <button id="copyOutputButton" class="secondary">Copy output</button>
         <button id="clearButton" class="secondary">Clear</button>

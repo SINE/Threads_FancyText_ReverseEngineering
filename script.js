@@ -1,7 +1,11 @@
-﻿const pasteZone = document.getElementById('pasteZone');
+﻿const BUILD_ID = 'v3  2026-05-09';
+
+const pasteZone = document.getElementById('pasteZone');
 const statusText = document.getElementById('statusText');
 const outputLog = document.getElementById('outputLog');
 const readClipboardButton = document.getElementById('readClipboardButton');
+const analyzeManualButton = document.getElementById('analyzeManualButton');
+const manualInput = document.getElementById('manualInput');
 const inspectSelectionButton = document.getElementById('inspectSelectionButton');
 const copyOutputButton = document.getElementById('copyOutputButton');
 const clearButton = document.getElementById('clearButton');
@@ -166,9 +170,108 @@ document.addEventListener('paste', function (e) {
 
   pageLog('\n── Full JSON blob ──');
   pageLog(JSON.stringify(safeOutput, null, 2));
+
+  // Diagnosis: detect iOS stripping
+  const onlyPlain = types.length === 1 && types[0] === 'text/plain';
+  const allZWS = onlyPlain && safeOutput.data['text/plain']?.charCodes?.every(c => c === 0x200B);
+  if (onlyPlain) {
+    pageLog('\n⚠️  DIAGNOSIS');
+    pageLog('Only text/plain was exposed. iOS Safari strips all proprietary');
+    pageLog('clipboard formats written by native apps (like Threads).');
+    pageLog('The actual GIF/object references are in a native UTType pasteboard');
+    pageLog('item that the web clipboard API cannot access on iOS.');
+    if (allZWS) {
+      pageLog('\nAll characters are U+200B (zero-width space) — these are likely');
+      pageLog('placeholder glyphs Threads uses in its text/plain fallback.');
+      pageLog('The real encoding is in the stripped native format.');
+    }
+    pageLog('\n→ OPTION 1 — iOS Shortcuts (no extra hardware needed):');
+    pageLog('  1. Copy a GIF-letter in Threads.');
+    pageLog('  2. Open the Shortcuts app and run a shortcut that does:');
+    pageLog('     Get Clipboard → Get Details of Rich Text (try HTML / RTF)');
+    pageLog('     → paste the result into the "Alternative input" field above.');
+    pageLog('\n→ OPTION 2 — Mac + Universal Clipboard (same iCloud account):');
+    pageLog('  1. Copy a GIF-letter on iPhone.');
+    pageLog('  2. On Mac, open Terminal and run:');
+    pageLog('       osascript -e \'clipboard info\'');
+    pageLog('     to list all UTTypes, then:');
+    pageLog('       osascript -e \'the clipboard as record\'');
+    pageLog('     to dump the full pasteboard data.');
+    pageLog('\n→ OPTION 3 — Network traffic (most reliable):');
+    pageLog('  Use mitmproxy or Charles Proxy on the same Wi-Fi.');
+    pageLog('  Post a thread with GIF-letters and capture the API request body.');
+    pageLog('  The encoding will be in the POST payload directly.');
+  }
+
   setStatus('Paste captured! See output below.');
 
 }, true /* capture phase — fires before contenteditable receives content */);
+
+// ── Analyze manual / Shortcuts input ────────────────────────────────────────────
+
+function analyzeManualInput() {
+  const raw = manualInput?.value?.trim();
+  if (!raw) {
+    pageLog('Manual input is empty.');
+    setStatus('Nothing to analyze.');
+    return;
+  }
+
+  pageLog('════════════════════════════════════');
+  pageLog('MANUAL INPUT ANALYSIS  ' + new Date().toISOString());
+  pageLog('════════════════════════════════════');
+
+  // 1. Analyze as-is
+  pageLog('── Raw string analysis ──');
+  pageLog(analyzeUnicode(raw));
+
+  // 2. Try base64 decode
+  try {
+    const decoded = decodeURIComponent(escape(atob(raw.replace(/\s/g, ''))));
+    pageLog('\n── Decoded as base64 ──');
+    pageLog(analyzeUnicode(decoded));
+    pageLog('\nDecoded text:');
+    pageLog(decoded.slice(0, 2000));
+  } catch {
+    // not valid base64
+  }
+
+  // 3. Try URL-decode
+  try {
+    const urlDecoded = decodeURIComponent(raw);
+    if (urlDecoded !== raw) {
+      pageLog('\n── URL-decoded ──');
+      pageLog(analyzeUnicode(urlDecoded));
+    }
+  } catch {
+    // not URL-encoded
+  }
+
+  // 4. Detect RTF
+  if (raw.startsWith('{\\rtf')) {
+    pageLog('\n── RTF detected ──');
+    pageLog('This looks like an RTF document. Key things to look for:');
+    pageLog('\'\\u<decimal>\' sequences = Unicode code points');
+    pageLog('\'\\objattph\' or \'\\object\' blocks = embedded objects (GIFs?)');
+    // extract unicode escapes
+    const unicodeEscapes = [...raw.matchAll(/\\u(-?\d+)/g)];
+    if (unicodeEscapes.length) {
+      pageLog(`Found ${unicodeEscapes.length} \\u escape(s):`);
+      unicodeEscapes.forEach(m => {
+        let cp = parseInt(m[1]);
+        if (cp < 0) cp += 65536; // RTF uses signed 16-bit
+        pageLog(`  \\u${m[1]} => U+${cp.toString(16).toUpperCase().padStart(4,'0')}  ${unicodeNote(cp)}`);
+      });
+    }
+    // look for object blocks
+    const objMatches = [...raw.matchAll(/\\objattph|\\object|\\pict/g)];
+    if (objMatches.length) {
+      pageLog(`Found ${objMatches.length} object/picture block(s) — these may contain the GIF references.`);
+    }
+  }
+
+  setStatus('Manual input analyzed.');
+}
 
 // ── Read full clipboard (all MIME types) ────────────────────────────────────
 // Uses the modern Clipboard API which can expose proprietary / binary types
@@ -306,6 +409,10 @@ function copyOutput() {
 // ── Wire up buttons ───────────────────────────────────────────────────────────
 
 document.addEventListener('DOMContentLoaded', () => {
+  if (analyzeManualButton) {
+    analyzeManualButton.addEventListener('click', analyzeManualInput);
+  }
+
   if (readClipboardButton) {
     readClipboardButton.addEventListener('click', readClipboard);
   }
@@ -327,6 +434,7 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   pageLog('Threads Rich Text Debug Tool ready.');
+  pageLog('Build: ' + BUILD_ID);
   pageLog('Tap the paste zone above, then long-press and paste from Threads.');
   pageLog('Every character will be decoded into its Unicode code points.\n');
   setStatus('Paste debugger active.');
