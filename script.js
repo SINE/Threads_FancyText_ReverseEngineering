@@ -1,180 +1,154 @@
-﻿const enableButton = document.getElementById('enableDebuggerButton');
-const inspectEditorButton = document.getElementById('inspectEditorButton');
-const inspectSelectionButton = document.getElementById('inspectSelectionButton');
-const captureEncodeButton = document.getElementById('captureEncodeButton');
-const monitorStateButton = document.getElementById('monitorStateButton');
+﻿const pasteZone = document.getElementById('pasteZone');
 const statusText = document.getElementById('statusText');
 const outputLog = document.getElementById('outputLog');
+const inspectSelectionButton = document.getElementById('inspectSelectionButton');
+const copyOutputButton = document.getElementById('copyOutputButton');
+const clearButton = document.getElementById('clearButton');
 
-let clipboardDebuggerActive = false;
+// ── Output helpers ────────────────────────────────────────────────────────────
 
 function pageLog(...args) {
-  const text = args
-    .map(arg => {
-      if (typeof arg === 'string') {
-        return arg;
-      }
-      if (arg instanceof Error) {
-        return arg.stack || arg.message;
-      }
-      try {
-        return JSON.stringify(arg, null, 2);
-      } catch {
-        return String(arg);
-      }
-    })
-    .join(' ');
+  const text = args.map(arg => {
+    if (typeof arg === 'string') return arg;
+    if (arg instanceof Error) return arg.stack || arg.message;
+    try { return JSON.stringify(arg, null, 2); } catch { return String(arg); }
+  }).join(' ');
 
   if (outputLog) {
-    outputLog.textContent += text + '\n';
+    outputLog.value += text + '\n';
     outputLog.scrollTop = outputLog.scrollHeight;
   }
-
   console.log(...args);
 }
 
 function setStatus(text) {
-  if (statusText) {
-    statusText.textContent = text;
-  }
+  if (statusText) statusText.textContent = text;
 }
 
-function setupClipboardDebugger() {
-  if (clipboardDebuggerActive) {
-    pageLog('Paste debugger is already enabled.');
-    setStatus('Paste debugger is already enabled.');
-    return;
-  }
+// ── Unicode analysis ──────────────────────────────────────────────────────────
+// This is the core of the reverse-engineering: each character is broken down
+// into its Unicode code point, hex value, UTF-8 byte sequence, and a human
+// readable note so we can see exactly what Threads encodes GIF-letters as.
 
-  clipboardDebuggerActive = true;
-  pageLog('📋 Paste debugger enabled. Copy rich text from Threads and paste into the page.');
-  setStatus('Paste debugger enabled.');
+function analyzeUnicode(text) {
+  if (!text || text.length === 0) return '(empty string)';
 
-  document.addEventListener('paste', function (e) {
-    e.preventDefault();
-    e.stopPropagation();
+  const encoder = new TextEncoder();
+  const allBytes = encoder.encode(text);
+  const chars = Array.from(text); // handles surrogate pairs correctly
 
-    pageLog('=== CLIPBOARD DATA CAPTURED ===');
-
-    const clipboardData = e.clipboardData || window.clipboardData;
-    const types = clipboardData?.types ? Array.from(clipboardData.types) : [];
-    pageLog('Available types:', types.join(', ') || 'none');
-
-    const results = {};
-
-    types.forEach(type => {
-      try {
-        const data = clipboardData.getData(type);
-        results[type] = data;
-        pageLog(`--- ${type} ---`);
-        pageLog(data);
-      } catch (err) {
-        pageLog(`Failed to get ${type}:`, err?.message || String(err));
-      }
-    });
-
-    if (clipboardData && clipboardData.items) {
-      pageLog('--- Clipboard Items ---');
-      for (let i = 0; i < clipboardData.items.length; i++) {
-        const item = clipboardData.items[i];
-        pageLog(`Item ${i}:`, item.type, item.kind);
-
-        if (item.kind === 'string') {
-          item.getAsString(str => {
-            pageLog(`Item ${i} content:`, str);
-          });
-        }
-      }
-    }
-
-    const safeOutput = {
-      timestamp: new Date().toISOString(),
-      types,
-      data: {}
-    };
-
-    types.forEach(type => {
-      try {
-        const data = clipboardData.getData(type);
-        safeOutput.data[type] = {
-          raw: data,
-          base64: btoa(unescape(encodeURIComponent(data))),
-          length: data.length,
-          charCodes: Array.from(data.slice(0, 100)).map(c => c.charCodeAt(0))
-        };
-      } catch (err) {
-        safeOutput.data[type] = { error: err?.message || String(err) };
-      }
-    });
-
-    pageLog('=== SAFE OUTPUT (copy this) ===');
-    pageLog(JSON.stringify(safeOutput, null, 2));
-
-    if (navigator.clipboard?.writeText) {
-      navigator.clipboard.writeText(JSON.stringify(safeOutput, null, 2))
-        .then(() => {
-          pageLog('✅ Debug JSON copied to clipboard.');
-          setStatus('Debug JSON copied to clipboard.');
-        })
-        .catch(err => {
-          pageLog('Clipboard write failed:', err?.message || String(err));
-          setStatus('Clipboard write failed. See output log.');
-        });
-    } else {
-      pageLog('Clipboard API unavailable. Copy the output from the page.');
-      setStatus('Clipboard API unavailable. Copy the output from the page.');
-    }
-  }, true);
-}
-
-function inspectRichTextEditor() {
-  pageLog('=== INSPECTING DOM ===');
-
-  const selectors = [
-    '[contenteditable="true"]',
-    '[role="textbox"]',
-    'textarea',
-    '.DraftEditor-root',
-    '.public-DraftEditor-content',
-    '[data-lexical-editor]',
-    '[data-slate-editor]',
-    '.ql-editor',
-    '.tiptap'
+  const lines = [
+    `Total characters : ${chars.length}`,
+    `Total UTF-8 bytes: ${allBytes.length}`,
+    `Raw base64       : ${btoa(unescape(encodeURIComponent(text)))}`,
+    ''
   ];
 
-  const editors = [];
-
-  selectors.forEach(selector => {
-    document.querySelectorAll(selector).forEach(el => {
-      editors.push({
-        selector,
-        innerHTML: el.innerHTML,
-        innerText: el.innerText,
-        textContent: el.textContent,
-        attributes: Array.from(el.attributes).map(a => ({ name: a.name, value: a.value })),
-        dataset: { ...el.dataset }
-      });
-    });
+  chars.forEach((char, i) => {
+    const cp = char.codePointAt(0);
+    const hex = 'U+' + cp.toString(16).toUpperCase().padStart(4, '0');
+    const utf8bytes = Array.from(encoder.encode(char))
+      .map(b => b.toString(16).padStart(2, '0'))
+      .join(' ');
+    const dec = cp;
+    const visible = (cp >= 0x20 && cp < 0x7f) ? char : '·';
+    const note = unicodeNote(cp);
+    lines.push(`[${i}]  ${hex}  dec:${dec}  utf8:[${utf8bytes}]  glyph:${visible}  ${note}`);
   });
 
-  if (editors.length > 0) {
-    pageLog(`Found ${editors.length} editor element(s).`);
-    pageLog(JSON.stringify(editors, null, 2));
-    setStatus(`Found ${editors.length} editor element(s).`);
-    return editors[0];
-  }
-
-  pageLog('❌ No rich text editor found.');
-  setStatus('No rich text editor found.');
-  return null;
+  return lines.join('\n');
 }
 
+function unicodeNote(cp) {
+  // Highlight characters commonly used by Threads / Meta rich text encoding
+  if (cp === 0x200B) return '← ZERO WIDTH SPACE';
+  if (cp === 0x200C) return '← ZERO WIDTH NON-JOINER';
+  if (cp === 0x200D) return '← ZERO WIDTH JOINER (emoji ZWJ sequences)';
+  if (cp === 0xFEFF) return '← BOM / ZERO WIDTH NO-BREAK SPACE';
+  if (cp === 0x2060) return '← WORD JOINER';
+  if (cp >= 0xE000 && cp <= 0xF8FF) return '← Private Use Area';
+  if (cp >= 0x100000 && cp <= 0x10FFFD) return '← Supplementary Private Use Area-B';
+  if (cp >= 0xF0000 && cp <= 0xFFFFD) return '← Supplementary Private Use Area-A';
+  if (cp >= 0x1F000 && cp <= 0x1FFFF) return '← Supplementary Multilingual (emoji range)';
+  if (cp >= 0xD800 && cp <= 0xDFFF) return '← Surrogate (should not appear standalone)';
+  if (cp < 0x20) return `← Control char (0x${cp.toString(16).toUpperCase()})`;
+  return '';
+}
+
+// ── Clipboard paste capture ──────────────────────────────────────────────────
+
+document.addEventListener('paste', function (e) {
+  // Allow the paste zone to receive focus/trigger the paste menu on iOS,
+  // but intercept before the content lands in the contenteditable.
+  e.preventDefault();
+  e.stopPropagation();
+
+  pageLog('════════════════════════════════════');
+  pageLog('PASTE CAPTURED  ' + new Date().toISOString());
+  pageLog('════════════════════════════════════');
+
+  const clipboardData = e.clipboardData || window.clipboardData;
+  const types = clipboardData?.types ? Array.from(clipboardData.types) : [];
+
+  pageLog('Available MIME types: ' + (types.join(', ') || 'none'));
+
+  const safeOutput = { timestamp: new Date().toISOString(), types, data: {} };
+
+  types.forEach(type => {
+    try {
+      const data = clipboardData.getData(type);
+      pageLog('\n── ' + type + ' ──');
+      pageLog('Length: ' + data.length + ' chars');
+
+      if (type === 'text/plain' || type === 'text/html') {
+        pageLog('\n--- Unicode Analysis ---');
+        pageLog(analyzeUnicode(data));
+        if (type === 'text/html') {
+          pageLog('\n--- Raw HTML ---');
+          pageLog(data);
+        }
+      }
+
+      safeOutput.data[type] = {
+        raw: data,
+        base64: btoa(unescape(encodeURIComponent(data))),
+        length: data.length,
+        charCodes: Array.from(data).map(c => c.codePointAt(0))
+      };
+    } catch (err) {
+      safeOutput.data[type] = { error: err?.message || String(err) };
+      pageLog('Failed to read ' + type + ': ' + (err?.message || String(err)));
+    }
+  });
+
+  if (clipboardData?.items) {
+    pageLog('\n── Clipboard Items ──');
+    for (let i = 0; i < clipboardData.items.length; i++) {
+      const item = clipboardData.items[i];
+      pageLog(`Item ${i}: type=${item.type}  kind=${item.kind}`);
+      if (item.kind === 'string') {
+        item.getAsString(str => {
+          pageLog(`Item ${i} raw string (${str.length} chars):`);
+          pageLog(analyzeUnicode(str));
+        });
+      }
+    }
+  }
+
+  pageLog('\n── Full JSON blob ──');
+  pageLog(JSON.stringify(safeOutput, null, 2));
+  setStatus('Paste captured! See output below.');
+
+}, true /* capture phase — fires before contenteditable receives content */);
+
+// ── Inspect selection ─────────────────────────────────────────────────────────
+
 function inspectSelection() {
-  pageLog('=== INSPECTING SELECTION ===');
+  pageLog('\n── Inspect Selection ──');
 
   const selection = window.getSelection();
-  if (!selection || selection.rangeCount === 0) {
-    pageLog('❌ No selection found. Select some text first!');
+  if (!selection || selection.rangeCount === 0 || selection.toString() === '') {
+    pageLog('No selection. Select text in the paste zone first.');
     setStatus('No selection found.');
     return;
   }
@@ -184,133 +158,70 @@ function inspectSelection() {
   const tempDiv = document.createElement('div');
   tempDiv.appendChild(fragment);
 
-  const output = {
-    selectedText: selection.toString(),
-    html: tempDiv.innerHTML,
-    html_base64: btoa(unescape(encodeURIComponent(tempDiv.innerHTML))),
-    rangeInfo: {
-      startOffset: range.startOffset,
-      endOffset: range.endOffset,
-      startContainer: range.startContainer.nodeName,
-      endContainer: range.endContainer.nodeName
-    }
-  };
+  const selectedText = selection.toString();
+  pageLog('Selected text (' + selectedText.length + ' chars):');
+  pageLog(analyzeUnicode(selectedText));
+  pageLog('\nSelection HTML:');
+  pageLog(tempDiv.innerHTML);
 
-  pageLog(JSON.stringify(output, null, 2));
   setStatus('Selection inspected.');
-  return output;
 }
 
-function monitorEditorState() {
-  pageLog('=== MONITORING EDITOR STATE ===');
+// ── Copy output (iOS-compatible) ──────────────────────────────────────────────
 
-  const draftEditor = document.querySelector('.DraftEditor-root');
-  if (draftEditor && window.__REACT_DEVTOOLS_GLOBAL_HOOK__) {
-    pageLog('Draft.js editor detected.');
-    const key = Object.keys(draftEditor).find(k => k.startsWith('__reactInternalInstance'));
-    if (key) {
-      pageLog('React instance found:', key);
-    }
-  }
-
-  const lexicalEditor = document.querySelector('[data-lexical-editor]');
-  if (lexicalEditor) {
-    pageLog('Lexical editor found.');
-  }
-
-  const editorVars = Object.keys(window)
-    .filter(k => /editor|draft|lexical|slate/i.test(k));
-
-  if (editorVars.length) {
-    pageLog('Window editor-related variables:', JSON.stringify(editorVars, null, 2));
-  } else {
-    pageLog('No obvious editor-related window variables found.');
-  }
-
-  setStatus('Editor state monitored.');
-}
-
-function captureElement(element) {
-  const output = {
-    outerHTML_base64: btoa(unescape(encodeURIComponent(element.outerHTML))),
-    innerHTML_base64: btoa(unescape(encodeURIComponent(element.innerHTML))),
-    innerText: element.innerText,
-    textContent: element.textContent,
-    attributes: {},
-    children: []
-  };
-
-  Array.from(element.attributes).forEach(attr => {
-    output.attributes[attr.name] = attr.value;
-  });
-
-  Array.from(element.children).forEach(child => {
-    output.children.push({
-      tagName: child.tagName,
-      className: child.className,
-      outerHTML_base64: btoa(unescape(encodeURIComponent(child.outerHTML))),
-      attributes: Object.fromEntries(Array.from(child.attributes).map(a => [a.name, a.value]))
-    });
-  });
-
-  pageLog(JSON.stringify(output, null, 2));
-  setStatus('Element captured.');
-  return output;
-}
-
-function captureAndEncode() {
-  const editor = document.querySelector('[contenteditable="true"]') || inspectRichTextEditor();
-  if (!editor) {
-    pageLog('❌ No contenteditable element found.');
-    setStatus('No contenteditable element found.');
+function copyOutput() {
+  if (!outputLog || !outputLog.value) {
+    setStatus('Nothing to copy yet.');
     return;
   }
 
-  return captureElement(editor.element ? editor.element : editor);
+  outputLog.focus();
+  outputLog.select();
+  outputLog.setSelectionRange(0, outputLog.value.length); // required on iOS
+
+  let success = false;
+  try {
+    success = document.execCommand('copy');
+  } catch (err) {
+    // fall through to Clipboard API
+  }
+
+  if (success) {
+    setStatus('Output copied to clipboard.');
+    return;
+  }
+
+  // Modern fallback (works on desktop and newer iOS with HTTPS)
+  if (navigator.clipboard?.writeText) {
+    navigator.clipboard.writeText(outputLog.value)
+      .then(() => setStatus('Output copied to clipboard.'))
+      .catch(() => setStatus('Copy failed — long-press the output and choose Select All → Copy.'));
+  } else {
+    setStatus('Long-press the output area, then Select All → Copy.');
+  }
 }
 
-function showMenu() {
-  pageLog('=== THREADS RICH TEXT DEBUG TOOL ===');
-  pageLog('Available commands:');
-  pageLog('• Enable paste debugger');
-  pageLog('• Inspect editor');
-  pageLog('• Inspect selection');
-  pageLog('• Capture and encode');
-  pageLog('• Monitor editor state');
-  pageLog('Use the buttons above on mobile or desktop to run each action.');
-}
+// ── Wire up buttons ───────────────────────────────────────────────────────────
 
 document.addEventListener('DOMContentLoaded', () => {
-  if (enableButton) {
-    enableButton.addEventListener('click', () => {
-      setupClipboardDebugger();
-    });
-  }
-
-  if (inspectEditorButton) {
-    inspectEditorButton.addEventListener('click', () => {
-      inspectRichTextEditor();
-    });
-  }
-
   if (inspectSelectionButton) {
-    inspectSelectionButton.addEventListener('click', () => {
-      inspectSelection();
+    inspectSelectionButton.addEventListener('click', inspectSelection);
+  }
+
+  if (copyOutputButton) {
+    copyOutputButton.addEventListener('click', copyOutput);
+  }
+
+  if (clearButton) {
+    clearButton.addEventListener('click', () => {
+      if (outputLog) outputLog.value = '';
+      if (pasteZone) pasteZone.textContent = 'Tap to focus, then paste your Threads text here.';
+      setStatus('Cleared.');
     });
   }
 
-  if (captureEncodeButton) {
-    captureEncodeButton.addEventListener('click', () => {
-      captureAndEncode();
-    });
-  }
-
-  if (monitorStateButton) {
-    monitorStateButton.addEventListener('click', () => {
-      monitorEditorState();
-    });
-  }
-
-  showMenu();
-  setStatus('Ready. Tap a button to begin.');
+  pageLog('Threads Rich Text Debug Tool ready.');
+  pageLog('Tap the paste zone above, then long-press and paste from Threads.');
+  pageLog('Every character will be decoded into its Unicode code points.\n');
+  setStatus('Paste debugger active.');
 });
